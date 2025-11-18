@@ -228,6 +228,8 @@ export const App: React.FC = () => {
             setCurrentUser(savedUser);
             setIsLoggedIn(true);
             log(`Корбар ${savedUser} ба система ворид шуд (аз сессияи пешина).`);
+            // Try to load fresh data on auto-login
+            importDataFromServer(false);
         }
     }, []);
     
@@ -258,14 +260,13 @@ export const App: React.FC = () => {
             
             setIsSyncing(true);
             try {
-                // Attempt to send to real server
+                // Attempt to send to real server (Single file storage)
                 const response = await fetch('/api/sync', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                     },
                     body: JSON.stringify({
-                        username: currentUser,
                         data: {
                             ...stateRef.current,
                             updatedAt: new Date().toISOString()
@@ -274,18 +275,13 @@ export const App: React.FC = () => {
                 });
 
                 if (response.ok) {
-                    log('Маълумот бомуваффақият ба сервер содир карда шуд (Real Sync).');
+                    log('Маълумот бомуваффақият дар сервери файлӣ захира шуд.');
                 } else {
                      throw new Error(`Server returned ${response.status}`);
                 }
             } catch (e) {
                 // Fallback to local storage simulation if server is not available
                 log(`Сервер дастнорас (${e}), захира дар локал.`);
-                const appData = {
-                    ...stateRef.current,
-                    updatedAt: new Date().toISOString()
-                };
-                localStorage.setItem('server_data', JSON.stringify(appData));
             } finally {
                 setIsSyncing(false);
             }
@@ -309,37 +305,32 @@ export const App: React.FC = () => {
         log(`Намуд ба '${activeView}' иваз шуд.`);
     }, [activeView]);
 
-    const importDataFromServer = async () => {
-        if (!isLoggedIn) { alert('Лутфан, аввал ба система ворид шавед.'); return; }
-        if (!navigator.onLine) { alert('Барои воридот аз сервер пайвастшавӣ ба интернет лозим аст.'); return; }
-        if (!window.confirm('Оё шумо мутмаин ҳастед? Маълумоти ҷории шумо бо маълумоти сервер иваз карда мешавад.')) return;
+    const importDataFromServer = async (showConfirm = true) => {
+        if (!isLoggedIn && showConfirm) { alert('Лутфан, аввал ба система ворид шавед.'); return; }
+        if (!navigator.onLine) { 
+            if (showConfirm) alert('Барои воридот аз сервер пайвастшавӣ ба интернет лозим аст.'); 
+            return; 
+        }
+        
+        if (showConfirm && !window.confirm('Оё шумо мутмаин ҳастед? Маълумоти ҷории шумо бо маълумоти сервер иваз карда мешавад.')) return;
 
         log('Оғози воридот аз сервер...');
         setIsSyncing(true);
         try {
             let serverData = null;
 
-            // Try fetching from real server
+            // Fetch from real server (Single file)
             try {
-                const response = await fetch(`/api/sync?username=${currentUser}`);
+                const response = await fetch('/api/sync');
                 if (response.ok) {
                      const json = await response.json();
                      if (json.data) {
                          serverData = json.data;
-                         log('Маълумот аз реали сервер гирифта шуд.');
+                         log('Маълумот аз сервери файлӣ гирифта шуд.');
                      }
                 }
             } catch (e) {
                 log(`Хатогӣ ҳангоми пайвастшавӣ ба сервер: ${e}`);
-            }
-
-            // Fallback to localStorage if server fetch failed
-            if (!serverData) {
-                const serverDataRaw = localStorage.getItem('server_data');
-                if (serverDataRaw) {
-                    serverData = JSON.parse(serverDataRaw);
-                    log('Маълумот аз локал (simulation) гирифта шуд.');
-                }
             }
 
             if (serverData) {
@@ -349,26 +340,30 @@ export const App: React.FC = () => {
                 setSoldToOptions(serverData.soldToOptions || SOLD_TO_OPTIONS);
                 setSizes(serverData.sizes || SIZES);
                 log(`Маълумот аз сервер бомуваффақият ворид карда шуд.`);
-                alert('Маълумот аз сервер бомуваффақият ворид карда шуд!');
+                if (showConfirm) alert('Маълумот аз сервер бомуваффақият ворид карда шуд!');
             } else {
                 log('Дар сервер маълумот ёфт нашуд.');
-                alert('Дар сервер маълумот барои воридот вуҷуд надорад.');
+                if (showConfirm) alert('Дар сервер маълумот барои воридот вуҷуд надорад.');
             }
         } catch (e) {
             log(`Хатогӣ ҳангоми воридот аз сервер: ${e}`);
-            alert('Хатогӣ ҳангоми воридот аз сервер.');
+            if (showConfirm) alert('Хатогӣ ҳангоми воридот аз сервер.');
         } finally {
             setIsSyncing(false);
         }
     };
     
-    const handleLoginAttempt = () => {
-        // Keep basic auth client-side as requested, but use username for server isolation
+    const handleLoginAttempt = async () => {
+        // Simple single user login
         if (loginUsername === 'Stol' && loginPassword === 'Stol') {
             setCurrentUser(loginUsername);
             setIsLoggedIn(true);
             localStorage.setItem('currentUser', loginUsername);
             log(`Корбар ${loginUsername} бомуваффақият ба система ворид шуд.`);
+            
+            // Auto-import data on login
+            await importDataFromServer(false);
+            
             setIsLoginModalOpen(false);
             setLoginUsername(''); setLoginPassword(''); setLoginError('');
         } else {
@@ -1157,13 +1152,13 @@ export const App: React.FC = () => {
                         <div className="space-y-4">
                             <p>Шумо ҳамчун <span className="font-bold text-indigo-600 dark:text-indigo-400">{currentUser}</span> ворид шудед.</p>
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                <button onClick={importDataFromServer} className="w-full flex items-center justify-center px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-md transition">
+                                <button onClick={() => importDataFromServer(true)} className="w-full flex items-center justify-center px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-md transition">
                                     <UploadIcon />
                                     Импорт аз сервер
                                 </button>
                                 <button onClick={() => triggerSync()} className="w-full flex items-center justify-center px-4 py-3 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-md transition">
                                     <DownloadIcon />
-                                    Экспорт ба сервер
+                                    Захира кардан (Экспорт)
                                 </button>
                                 <button onClick={handleLogout} className="w-full flex items-center justify-center px-4 py-3 bg-red-600 hover:bg-red-700 text-white font-semibold rounded-md transition sm:col-span-2">
                                     <LogoutIcon />
