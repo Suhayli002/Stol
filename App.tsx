@@ -111,12 +111,6 @@ const LogoutIcon = () => (
     </svg>
 );
 
-const SyncIcon = () => (
-    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 animate-spin" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h5M20 20v-5h-5M4 4l1.5 1.5A9 9 0 0120.5 10M20 20l-1.5-1.5A9 9 0 003.5 14" />
-    </svg>
-);
-
 const InstallAppIcon = () => (
     <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
         <path strokeLinecap="round" strokeLinejoin="round" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
@@ -178,17 +172,13 @@ export const App: React.FC = () => {
   const [isDebugMenuOpen, setIsDebugMenuOpen] = useState(false);
   const [logs, setLogs] = useState(() => getLogs());
   
-  // Auth & Sync State
+  // Auth State
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [currentUser, setCurrentUser] = useState<string | null>(null);
   const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
   const [loginUsername, setLoginUsername] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState('');
-  const [isSyncing, setIsSyncing] = useState(false);
-  const syncTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Use a ref to hold current state for sync function to avoid dependency cycles in timeouts
-  const stateRef = useRef({ dailyOrders, dailySoldItems, prices, soldToOptions, sizes });
 
   // PWA Install State
   const [installPrompt, setInstallPrompt] = useState<any>(null);
@@ -228,65 +218,18 @@ export const App: React.FC = () => {
             setCurrentUser(savedUser);
             setIsLoggedIn(true);
             log(`Корбар ${savedUser} ба система ворид шуд (аз сессияи пешина).`);
-            // Try to load fresh data on auto-login
-            importDataFromServer(false);
         }
     }, []);
     
-    // Update state ref whenever data changes
+    // Save data to localStorage whenever it changes
     useEffect(() => {
-        stateRef.current = { dailyOrders, dailySoldItems, prices, soldToOptions, sizes };
-        
-        // Save to localStorage
         localStorage.setItem('dailyOrders', JSON.stringify(dailyOrders));
         localStorage.setItem('dailySoldItems', JSON.stringify(dailySoldItems));
         localStorage.setItem('prices', JSON.stringify(prices));
         localStorage.setItem('soldToOptions', JSON.stringify(soldToOptions));
         localStorage.setItem('sizes', JSON.stringify(sizes));
+    }, [dailyOrders, dailySoldItems, prices, soldToOptions, sizes]);
 
-        // Trigger Sync if logged in
-        if (isLoggedIn) {
-            triggerSync();
-        }
-    }, [dailyOrders, dailySoldItems, prices, soldToOptions, sizes, isLoggedIn]);
-
-    const triggerSync = () => {
-        if (syncTimeoutRef.current) {
-            clearTimeout(syncTimeoutRef.current);
-        }
-
-        syncTimeoutRef.current = setTimeout(async () => {
-            if (!navigator.onLine) return;
-            
-            setIsSyncing(true);
-            try {
-                // Attempt to send to real server (Single file storage)
-                const response = await fetch('/api/sync', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        data: {
-                            ...stateRef.current,
-                            updatedAt: new Date().toISOString()
-                        }
-                    })
-                });
-
-                if (response.ok) {
-                    log('Маълумот бомуваффақият дар сервери файлӣ захира шуд.');
-                } else {
-                     throw new Error(`Server returned ${response.status}`);
-                }
-            } catch (e) {
-                // Fallback to local storage simulation if server is not available
-                log(`Сервер дастнорас (${e}), захира дар локал.`);
-            } finally {
-                setIsSyncing(false);
-            }
-        }, 2000); // Debounce 2 seconds
-    };
 
     useEffect(() => {
         document.documentElement.style.fontSize = `${zoomLevel}%`;
@@ -305,54 +248,6 @@ export const App: React.FC = () => {
         log(`Намуд ба '${activeView}' иваз шуд.`);
     }, [activeView]);
 
-    const importDataFromServer = async (showConfirm = true) => {
-        if (!isLoggedIn && showConfirm) { alert('Лутфан, аввал ба система ворид шавед.'); return; }
-        if (!navigator.onLine) { 
-            if (showConfirm) alert('Барои воридот аз сервер пайвастшавӣ ба интернет лозим аст.'); 
-            return; 
-        }
-        
-        if (showConfirm && !window.confirm('Оё шумо мутмаин ҳастед? Маълумоти ҷории шумо бо маълумоти сервер иваз карда мешавад.')) return;
-
-        log('Оғози воридот аз сервер...');
-        setIsSyncing(true);
-        try {
-            let serverData = null;
-
-            // Fetch from real server (Single file)
-            try {
-                const response = await fetch('/api/sync');
-                if (response.ok) {
-                     const json = await response.json();
-                     if (json.data) {
-                         serverData = json.data;
-                         log('Маълумот аз сервери файлӣ гирифта шуд.');
-                     }
-                }
-            } catch (e) {
-                log(`Хатогӣ ҳангоми пайвастшавӣ ба сервер: ${e}`);
-            }
-
-            if (serverData) {
-                setDailyOrders(serverData.dailyOrders || {});
-                setDailySoldItems(serverData.dailySoldItems || {});
-                setPrices(serverData.prices || PRICES_DATA);
-                setSoldToOptions(serverData.soldToOptions || SOLD_TO_OPTIONS);
-                setSizes(serverData.sizes || SIZES);
-                log(`Маълумот аз сервер бомуваффақият ворид карда шуд.`);
-                if (showConfirm) alert('Маълумот аз сервер бомуваффақият ворид карда шуд!');
-            } else {
-                log('Дар сервер маълумот ёфт нашуд.');
-                if (showConfirm) alert('Дар сервер маълумот барои воридот вуҷуд надорад.');
-            }
-        } catch (e) {
-            log(`Хатогӣ ҳангоми воридот аз сервер: ${e}`);
-            if (showConfirm) alert('Хатогӣ ҳангоми воридот аз сервер.');
-        } finally {
-            setIsSyncing(false);
-        }
-    };
-    
     const handleLoginAttempt = async () => {
         // Simple single user login
         if (loginUsername === 'Stol' && loginPassword === 'Stol') {
@@ -360,9 +255,6 @@ export const App: React.FC = () => {
             setIsLoggedIn(true);
             localStorage.setItem('currentUser', loginUsername);
             log(`Корбар ${loginUsername} бомуваффақият ба система ворид шуд.`);
-            
-            // Auto-import data on login
-            await importDataFromServer(false);
             
             setIsLoginModalOpen(false);
             setLoginUsername(''); setLoginPassword(''); setLoginError('');
@@ -930,13 +822,6 @@ export const App: React.FC = () => {
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-slate-50 p-6 sm:p-8 lg:p-10 pb-36 transition-colors duration-300">
       
-      {isSyncing && (
-          <div className="fixed top-4 right-4 z-[80] bg-slate-800 text-white text-sm px-4 py-2 rounded-full shadow-lg flex items-center gap-2">
-              <SyncIcon />
-              <span>Синхронизатсия...</span>
-          </div>
-      )}
-
       <div className="max-w-4xl mx-auto">
         <header className="relative flex items-center justify-center mb-12">
             {(activeView === 'produced' || activeView === 'sold' || activeView === 'total') && (
@@ -1147,28 +1032,18 @@ export const App: React.FC = () => {
           {activeView === 'settings' && (
               <section className="space-y-10">
                 <div className="bg-white dark:bg-slate-800 p-6 rounded-lg shadow-lg">
-                    <h3 className="text-xl font-semibold mb-6 border-b border-slate-200 dark:border-slate-700 pb-4">Аккаунт ва синхронизатсия</h3>
+                    <h3 className="text-xl font-semibold mb-6 border-b border-slate-200 dark:border-slate-700 pb-4">Аккаунт</h3>
                     {isLoggedIn ? (
                         <div className="space-y-4">
                             <p>Шумо ҳамчун <span className="font-bold text-indigo-600 dark:text-indigo-400">{currentUser}</span> ворид шудед.</p>
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                <button onClick={() => importDataFromServer(true)} className="w-full flex items-center justify-center px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-md transition">
-                                    <UploadIcon />
-                                    Импорт аз сервер
-                                </button>
-                                <button onClick={() => triggerSync()} className="w-full flex items-center justify-center px-4 py-3 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-md transition">
-                                    <DownloadIcon />
-                                    Захира кардан (Экспорт)
-                                </button>
-                                <button onClick={handleLogout} className="w-full flex items-center justify-center px-4 py-3 bg-red-600 hover:bg-red-700 text-white font-semibold rounded-md transition sm:col-span-2">
-                                    <LogoutIcon />
-                                    Баромадан
-                                </button>
-                            </div>
+                            <button onClick={handleLogout} className="w-full flex items-center justify-center px-4 py-3 bg-red-600 hover:bg-red-700 text-white font-semibold rounded-md transition">
+                                <LogoutIcon />
+                                Баромадан
+                            </button>
                         </div>
                     ) : (
                         <div>
-                            <p className="mb-4">Барои синхронизатсияи маълумот, лутфан ба аккаунти худ ворид шавед.</p>
+                            <p className="mb-4">Барои дастрасӣ ба баъзе функсияҳо ворид шавед.</p>
                             <button onClick={() => setIsLoginModalOpen(true)} className="w-full flex items-center justify-center px-4 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-md transition">
                                 <LoginIcon />
                                 Ворид шудан
@@ -1246,7 +1121,7 @@ export const App: React.FC = () => {
 
                 <div className="text-center text-slate-500 dark:text-slate-400">
                   <p onClick={handleVersionClick} className="cursor-pointer select-none">
-                    Версияи барнома: 1.1
+                    Версияи барнома: 1.2
                   </p>
                 </div>
 

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'hisobot-cache-v4';
+const CACHE_NAME = 'hisobot-cache-v5';
 
 // Файлы, которые мы знаем точно и хотим закэшировать сразу при установке
 const PRECACHE_URLS = [
@@ -40,8 +40,8 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
-  // Игнорируем запросы к API (пусть идут прямо на сервер) и не GET запросы (POST нельзя кэшировать)
-  if (event.request.url.includes('/api/') || event.request.method !== 'GET') {
+  // Игнорируем методы, отличные от GET (POST и т.д. кэшировать нельзя)
+  if (event.request.method !== 'GET') {
     return;
   }
 
@@ -53,10 +53,12 @@ self.addEventListener('fetch', (event) => {
         }
 
         return fetch(event.request).then((networkResponse) => {
+          // Проверяем, что ответ валидный
           if (!networkResponse || networkResponse.status !== 200 || networkResponse.type !== 'basic') {
             return networkResponse;
           }
 
+          // Кэшируем ответ для будущих офлайн-запросов
           const responseToCache = networkResponse.clone();
           caches.open(CACHE_NAME)
             .then((cache) => {
