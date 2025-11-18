@@ -2,18 +2,19 @@
   "name": "Истеҳсолот - Ҳисоботи андозаҳо",
   "short_name": "Истеҳсолот",
   "description": "Барномаи содда барои интихоби андоза ва миқдори маҳсулот ва илова кардани онҳо ба рӯйхат. Барнома дар мавзӯи торик сохта шудааст.",
-  "start_url": ".",
+  "start_url": "/",
   "display": "standalone",
   "background_color": "#0f172a",
   "theme_color": "#4f46e5",
+  "orientation": "portrait",
   "icons": [
     {
-      "src": "/icon-192x192.png",
+      "src": "https://cdn-icons-png.flaticon.com/512/2897/2897785.png",
       "type": "image/png",
       "sizes": "192x192"
     },
     {
-      "src": "/icon-512x512.png",
+      "src": "https://cdn-icons-png.flaticon.com/512/2897/2897785.png",
       "type": "image/png",
       "sizes": "512x512"
     }

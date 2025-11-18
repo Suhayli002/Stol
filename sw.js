@@ -1,37 +1,25 @@
-const CACHE_NAME = 'hisobot-cache-v2';
-const urlsToCache = [
+const CACHE_NAME = 'hisobot-cache-v3';
+
+// Файлы, которые мы знаем точно и хотим закэшировать сразу при установке
+const PRECACHE_URLS = [
   '/',
   '/index.html',
   '/index.tsx',
-  '/manifest.json',
   '/types.ts',
   '/constants.ts',
   '/logger.ts',
   '/App.tsx',
-  'https://cdn.tailwindcss.com',
-  'https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js',
-  'https://cdn.jsdelivr.net/npm/chart.js'
+  '/manifest.json'
 ];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME)
       .then((cache) => {
-        console.log('Opened cache');
-        return cache.addAll(urlsToCache);
+        console.log('Кэширование основных файлов приложения');
+        return cache.addAll(PRECACHE_URLS);
       })
-  );
-});
-
-self.addEventListener('fetch', (event) => {
-  event.respondWith(
-    caches.match(event.request)
-      .then((response) => {
-        if (response) {
-          return response;
-        }
-        return fetch(event.request);
-      })
+      .then(() => self.skipWaiting())
   );
 });
 
@@ -42,10 +30,44 @@ self.addEventListener('activate', (event) => {
       return Promise.all(
         cacheNames.map((cacheName) => {
           if (cacheWhitelist.indexOf(cacheName) === -1) {
+             console.log('Удаление старого кэша:', cacheName);
             return caches.delete(cacheName);
           }
         })
       );
-    })
+    }).then(() => self.clients.claim())
+  );
+});
+
+self.addEventListener('fetch', (event) => {
+  // Стратегия: Stale-While-Revalidate для большинства запросов
+  // или Cache First, falling back to Network
+  
+  event.respondWith(
+    caches.match(event.request)
+      .then((cachedResponse) => {
+        if (cachedResponse) {
+          return cachedResponse;
+        }
+
+        // Если в кэше нет, делаем запрос в сеть
+        return fetch(event.request).then((networkResponse) => {
+          // Проверяем, что ответ валидный
+          if (!networkResponse || networkResponse.status !== 200 || networkResponse.type !== 'basic' && networkResponse.type !== 'cors') {
+            return networkResponse;
+          }
+
+          // Клонируем ответ, так как поток можно читать только один раз
+          const responseToCache = networkResponse.clone();
+
+          caches.open(CACHE_NAME)
+            .then((cache) => {
+              // Динамически кэшируем новые ресурсы (например, библиотеки с CDN)
+              cache.put(event.request, responseToCache);
+            });
+
+          return networkResponse;
+        });
+      })
   );
 });
