@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { OrderItem, SoldItem, PriceItem } from './types';
-// Fix: Corrected typo from SOLD_to_OPTIONS to SOLD_TO_OPTIONS
 import { SIZES, QUANTITIES, SOLD_TO_OPTIONS, PRICES_DATA } from './constants';
 import { log, getLogs, clearLogs } from './logger';
 
@@ -187,6 +186,10 @@ export const App: React.FC = () => {
   const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState('');
   const [isSyncing, setIsSyncing] = useState(false);
+  const syncTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Use a ref to hold current state for sync function to avoid dependency cycles in timeouts
+  const stateRef = useRef({ dailyOrders, dailySoldItems, prices, soldToOptions, sizes });
+
   // PWA Install State
   const [installPrompt, setInstallPrompt] = useState<any>(null);
 
@@ -196,15 +199,11 @@ export const App: React.FC = () => {
 
     useEffect(() => {
         const handleBeforeInstallPrompt = (e: any) => {
-            // Prevent Chrome 67 and earlier from automatically showing the prompt
             e.preventDefault();
-            // Stash the event so it can be triggered later.
             setInstallPrompt(e);
             log('Омода барои насби барнома (PWA).');
         };
-
         window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
-
         return () => {
             window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
         };
@@ -212,19 +211,15 @@ export const App: React.FC = () => {
 
     const handleInstallClick = async () => {
         if (!installPrompt) return;
-        // Show the install prompt
         installPrompt.prompt();
-        // Wait for the user to respond to the prompt
         const { outcome } = await installPrompt.userChoice;
         if (outcome === 'accepted') {
             log('Корбар насби барномаро қабул кард');
         } else {
             log('Корбар насби барномаро рад кард');
         }
-        // We've used the prompt, and can't use it again, throw it away
         setInstallPrompt(null);
     };
-
 
     useEffect(() => {
         log('Барнома оғоз шуд.');
@@ -235,35 +230,67 @@ export const App: React.FC = () => {
             log(`Корбар ${savedUser} ба система ворид шуд (аз сессияи пешина).`);
         }
     }, []);
-
-    const exportDataToServer = useMemo(() => async () => {
-        if (!isLoggedIn || !navigator.onLine) return;
-        
-        setIsSyncing(true);
-        log('Оғози содирот ба сервер...');
-
-        await new Promise(resolve => setTimeout(resolve, 1500)); // Simulate network delay
-
-        try {
-            const appData = {
-                dailyOrders, dailySoldItems, prices, soldToOptions, sizes,
-                updatedAt: new Date().toISOString()
-            };
-            localStorage.setItem('server_data', JSON.stringify(appData));
-            log('Маълумот бомуваффақият ба сервер содир карда шуд.');
-        } catch (e) {
-            log(`Хатогӣ ҳангоми содирот ба сервер: ${e}`);
-        } finally {
-            setIsSyncing(false);
-        }
-    }, [isLoggedIn, dailyOrders, dailySoldItems, prices, soldToOptions, sizes]);
     
-    useEffect(() => { localStorage.setItem('dailyOrders', JSON.stringify(dailyOrders)); exportDataToServer(); }, [dailyOrders, exportDataToServer]);
-    useEffect(() => { localStorage.setItem('dailySoldItems', JSON.stringify(dailySoldItems)); exportDataToServer(); }, [dailySoldItems, exportDataToServer]);
-    useEffect(() => { localStorage.setItem('prices', JSON.stringify(prices)); exportDataToServer(); }, [prices, exportDataToServer]);
-    useEffect(() => { localStorage.setItem('soldToOptions', JSON.stringify(soldToOptions)); exportDataToServer(); }, [soldToOptions, exportDataToServer]);
-    useEffect(() => { localStorage.setItem('sizes', JSON.stringify(sizes)); exportDataToServer(); }, [sizes, exportDataToServer]);
+    // Update state ref whenever data changes
+    useEffect(() => {
+        stateRef.current = { dailyOrders, dailySoldItems, prices, soldToOptions, sizes };
+        
+        // Save to localStorage
+        localStorage.setItem('dailyOrders', JSON.stringify(dailyOrders));
+        localStorage.setItem('dailySoldItems', JSON.stringify(dailySoldItems));
+        localStorage.setItem('prices', JSON.stringify(prices));
+        localStorage.setItem('soldToOptions', JSON.stringify(soldToOptions));
+        localStorage.setItem('sizes', JSON.stringify(sizes));
 
+        // Trigger Sync if logged in
+        if (isLoggedIn) {
+            triggerSync();
+        }
+    }, [dailyOrders, dailySoldItems, prices, soldToOptions, sizes, isLoggedIn]);
+
+    const triggerSync = () => {
+        if (syncTimeoutRef.current) {
+            clearTimeout(syncTimeoutRef.current);
+        }
+
+        syncTimeoutRef.current = setTimeout(async () => {
+            if (!navigator.onLine) return;
+            
+            setIsSyncing(true);
+            try {
+                // Attempt to send to real server
+                const response = await fetch('/api/sync', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        username: currentUser,
+                        data: {
+                            ...stateRef.current,
+                            updatedAt: new Date().toISOString()
+                        }
+                    })
+                });
+
+                if (response.ok) {
+                    log('Маълумот бомуваффақият ба сервер содир карда шуд (Real Sync).');
+                } else {
+                     throw new Error(`Server returned ${response.status}`);
+                }
+            } catch (e) {
+                // Fallback to local storage simulation if server is not available
+                log(`Сервер дастнорас (${e}), захира дар локал.`);
+                const appData = {
+                    ...stateRef.current,
+                    updatedAt: new Date().toISOString()
+                };
+                localStorage.setItem('server_data', JSON.stringify(appData));
+            } finally {
+                setIsSyncing(false);
+            }
+        }, 2000); // Debounce 2 seconds
+    };
 
     useEffect(() => {
         document.documentElement.style.fontSize = `${zoomLevel}%`;
@@ -288,17 +315,40 @@ export const App: React.FC = () => {
         if (!window.confirm('Оё шумо мутмаин ҳастед? Маълумоти ҷории шумо бо маълумоти сервер иваз карда мешавад.')) return;
 
         log('Оғози воридот аз сервер...');
+        setIsSyncing(true);
         try {
-            await new Promise(resolve => setTimeout(resolve, 500)); // Simulate delay
-            const serverDataRaw = localStorage.getItem('server_data');
-            if (serverDataRaw) {
-                const serverData = JSON.parse(serverDataRaw);
+            let serverData = null;
+
+            // Try fetching from real server
+            try {
+                const response = await fetch(`/api/sync?username=${currentUser}`);
+                if (response.ok) {
+                     const json = await response.json();
+                     if (json.data) {
+                         serverData = json.data;
+                         log('Маълумот аз реали сервер гирифта шуд.');
+                     }
+                }
+            } catch (e) {
+                log(`Хатогӣ ҳангоми пайвастшавӣ ба сервер: ${e}`);
+            }
+
+            // Fallback to localStorage if server fetch failed
+            if (!serverData) {
+                const serverDataRaw = localStorage.getItem('server_data');
+                if (serverDataRaw) {
+                    serverData = JSON.parse(serverDataRaw);
+                    log('Маълумот аз локал (simulation) гирифта шуд.');
+                }
+            }
+
+            if (serverData) {
                 setDailyOrders(serverData.dailyOrders || {});
                 setDailySoldItems(serverData.dailySoldItems || {});
                 setPrices(serverData.prices || PRICES_DATA);
                 setSoldToOptions(serverData.soldToOptions || SOLD_TO_OPTIONS);
                 setSizes(serverData.sizes || SIZES);
-                log(`Маълумот аз сервер бомуваффақият ворид карда шуд (санаи навсозӣ: ${serverData.updatedAt}).`);
+                log(`Маълумот аз сервер бомуваффақият ворид карда шуд.`);
                 alert('Маълумот аз сервер бомуваффақият ворид карда шуд!');
             } else {
                 log('Дар сервер маълумот ёфт нашуд.');
@@ -307,10 +357,13 @@ export const App: React.FC = () => {
         } catch (e) {
             log(`Хатогӣ ҳангоми воридот аз сервер: ${e}`);
             alert('Хатогӣ ҳангоми воридот аз сервер.');
+        } finally {
+            setIsSyncing(false);
         }
     };
     
     const handleLoginAttempt = () => {
+        // Keep basic auth client-side as requested, but use username for server isolation
         if (loginUsername === 'Stol' && loginPassword === 'Stol') {
             setCurrentUser(loginUsername);
             setIsLoggedIn(true);
@@ -492,9 +545,7 @@ export const App: React.FC = () => {
     }, [dailyOrders, dailySoldItems, sizes]);
 
     const monthlyStockData = useMemo(() => {
-        // Fix: Explicitly cast to OrderItem[] to avoid 'unknown' type error on filter/reduce
         const monthProducedItems = (dailyOrders[yearMonthKey] ? Object.values(dailyOrders[yearMonthKey]).flat() : []) as OrderItem[];
-        // Fix: Explicitly cast to SoldItem[] to avoid 'unknown' type error on filter/reduce
         const monthSoldItems = (dailySoldItems[yearMonthKey] ? Object.values(dailySoldItems[yearMonthKey]).flat() : []) as SoldItem[];
 
         return sizes.map(size => {
@@ -586,11 +637,9 @@ export const App: React.FC = () => {
 
             const producedSheet = workbook.Sheets['Истеҳсолшуда'];
             if (producedSheet) {
-                // Fix: Specify the type for rows from Excel sheet to avoid 'unknown' type errors.
                 const producedData = XLSX.utils.sheet_to_json(producedSheet) as { 'Сана': string | number; 'Андоза': string; 'Миқдор': number }[];
                 const newDailyOrders: DailyData<OrderItem> = {};
                 producedData.forEach((row) => {
-                    // Handle Excel's date serial number format
                     const dateValue = typeof row['Сана'] === 'number'
                         ? new Date(Date.UTC(1900, 0, row['Сана'] - 1))
                         : new Date(row['Сана']);
@@ -610,7 +659,6 @@ export const App: React.FC = () => {
 
             const soldSheet = workbook.Sheets['Фурӯхташуда'];
             if (soldSheet) {
-                // Fix: Specify the type for rows from Excel sheet to avoid 'unknown' type errors.
                 const soldData = XLSX.utils.sheet_to_json(soldSheet) as { 'Сана': string | number; 'Андоза': string; 'Миқдор': number; 'Харидор': string }[];
                 const newDailySoldItems: DailyData<SoldItem> = {};
                 soldData.forEach((row) => {
@@ -632,7 +680,6 @@ export const App: React.FC = () => {
 
             const pricesSheet = workbook.Sheets['Нархҳо'];
             if (pricesSheet) {
-                // Fix: Specify the type for rows from Excel sheet to avoid 'unknown' type errors.
                 const pricesData = XLSX.utils.sheet_to_json(pricesSheet) as { 'Андоза': string; 'Арзиши аслӣ': number; 'Яклухт': number; 'Иловапулӣ': number }[];
                 const newPrices: PriceItem[] = pricesData.map(row => ({
                     size: row['Андоза'],
@@ -710,7 +757,6 @@ export const App: React.FC = () => {
   const profitData = useMemo(() => {
     const monthSoldItems = (dailySoldItems[yearMonthKey] ? Object.values(dailySoldItems[yearMonthKey]).flat() : []);
     let totalProfit = 0;
-    // Fix: Explicitly type 'item' as SoldItem to resolve property access errors.
     const profitBySize = monthSoldItems.reduce((acc, item: SoldItem) => {
         const priceInfo = prices.find(p => p.size === item.size);
         if (priceInfo) {
@@ -728,7 +774,6 @@ export const App: React.FC = () => {
 
   const clientPurchaseData = useMemo(() => {
     const monthSoldItems = (dailySoldItems[yearMonthKey] ? Object.values(dailySoldItems[yearMonthKey]).flat() : []);
-    // Fix: Explicitly type 'item' as SoldItem to resolve property access errors.
     const purchasesByClient = monthSoldItems.reduce((acc, item: SoldItem) => {
         const priceInfo = prices.find(p => p.size === item.size);
         if (priceInfo) {
@@ -1116,7 +1161,7 @@ export const App: React.FC = () => {
                                     <UploadIcon />
                                     Импорт аз сервер
                                 </button>
-                                <button onClick={() => exportDataToServer()} className="w-full flex items-center justify-center px-4 py-3 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-md transition">
+                                <button onClick={() => triggerSync()} className="w-full flex items-center justify-center px-4 py-3 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-md transition">
                                     <DownloadIcon />
                                     Экспорт ба сервер
                                 </button>
@@ -1206,7 +1251,7 @@ export const App: React.FC = () => {
 
                 <div className="text-center text-slate-500 dark:text-slate-400">
                   <p onClick={handleVersionClick} className="cursor-pointer select-none">
-                    Версияи барнома: 1.0
+                    Версияи барнома: 1.1
                   </p>
                 </div>
 

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'hisobot-cache-v3';
+const CACHE_NAME = 'hisobot-cache-v4';
 
 // Файлы, которые мы знаем точно и хотим закэшировать сразу при установке
 const PRECACHE_URLS = [
@@ -40,9 +40,11 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
-  // Стратегия: Stale-While-Revalidate для большинства запросов
-  // или Cache First, falling back to Network
-  
+  // Игнорируем запросы к API (пусть идут прямо на сервер) и не GET запросы (POST нельзя кэшировать)
+  if (event.request.url.includes('/api/') || event.request.method !== 'GET') {
+    return;
+  }
+
   event.respondWith(
     caches.match(event.request)
       .then((cachedResponse) => {
@@ -50,19 +52,14 @@ self.addEventListener('fetch', (event) => {
           return cachedResponse;
         }
 
-        // Если в кэше нет, делаем запрос в сеть
         return fetch(event.request).then((networkResponse) => {
-          // Проверяем, что ответ валидный
-          if (!networkResponse || networkResponse.status !== 200 || networkResponse.type !== 'basic' && networkResponse.type !== 'cors') {
+          if (!networkResponse || networkResponse.status !== 200 || networkResponse.type !== 'basic') {
             return networkResponse;
           }
 
-          // Клонируем ответ, так как поток можно читать только один раз
           const responseToCache = networkResponse.clone();
-
           caches.open(CACHE_NAME)
             .then((cache) => {
-              // Динамически кэшируем новые ресурсы (например, библиотеки с CDN)
               cache.put(event.request, responseToCache);
             });
 
